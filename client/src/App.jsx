@@ -6,7 +6,7 @@ import Listings from "./pages/Listings.jsx";
 import MyListings from "./pages/MyListings.jsx";
 import Faq from "./pages/Faq.jsx";
 import AuthModal from "./components/AuthModal.jsx";
-import { clearToken, getToken } from "./api/api.js";
+import { apiLogout, clearToken, getToken } from "./api/api.js";
 
 export default function App() {
   const navigate = useNavigate();
@@ -34,7 +34,12 @@ export default function App() {
     setLogoutConfirmOpen(true);
   }
 
-  function confirmLogout() {
+  async function confirmLogout() {
+    try {
+      await apiLogout();
+    } catch {
+      // non-fatal
+    }
     clearToken();
     setTokenState(null);
     setLogoutConfirmOpen(false);

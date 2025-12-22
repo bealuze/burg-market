@@ -23,6 +23,28 @@ function signToken(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "7d" });
 }
 
+function authCookieOptions() {
+  const isProd = process.env.NODE_ENV === "production";
+  return {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+    path: "/",
+  };
+}
+
+function setAuthCookie(res, token) {
+  res.cookie("token", token, {
+    ...authCookieOptions(),
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+}
+
+router.post("/logout", (req, res) => {
+  res.clearCookie("token", authCookieOptions());
+  return res.json({ message: "Logged out." });
+});
+
 router.post("/register", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -87,6 +109,7 @@ router.post("/verify", (req, res) => {
     if (err || !user) return res.status(400).json({ error: "Account not found." });
     if (user.is_verified === 1) {
       const token = signToken({ userId: user.id, email: email.toLowerCase() });
+      setAuthCookie(res, token);
       return res.json({ message: "Already verified.", token });
     }
 
@@ -109,6 +132,7 @@ router.post("/verify", (req, res) => {
           db.run(`DELETE FROM email_verifications WHERE user_id = ?`, [user.id]);
 
           const token = signToken({ userId: user.id, email: email.toLowerCase() });
+          setAuthCookie(res, token);
           return res.json({ message: "Email verified.", token });
         });
       }
@@ -133,6 +157,7 @@ router.post("/login", async (req, res) => {
     }
 
     const token = signToken({ userId: user.id, email: user.email });
+    setAuthCookie(res, token);
     return res.json({ message: "Logged in.", token });
   });
 });

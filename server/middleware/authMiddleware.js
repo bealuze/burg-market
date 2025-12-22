@@ -3,11 +3,10 @@ const jwt = require("jsonwebtoken");
 function authMiddleware(req, res, next) {
 	const authHeader = req.headers.authorization;
 	const hasBearer = typeof authHeader === "string" && authHeader.startsWith("Bearer ");
-	if (!hasBearer) {
-		return res.status(401).json({ error: "Missing or invalid Authorization header." });
-	}
+	const bearerToken = hasBearer ? authHeader.slice("Bearer ".length).trim() : null;
+	const cookieToken = req.cookies && typeof req.cookies.token === "string" ? req.cookies.token.trim() : null;
+	const token = bearerToken || cookieToken;
 
-	const token = authHeader.slice("Bearer ".length).trim();
 	if (!token) {
 		return res.status(401).json({ error: "Missing token." });
 	}

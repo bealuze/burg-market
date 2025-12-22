@@ -29,6 +29,7 @@ async function request(path, { method = "GET", body, token } = {}) {
 	const res = await fetch(`${BASE_URL}${path}`, {
 		method,
 		headers,
+		credentials: "include",
 		body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
 	});
 
@@ -102,4 +103,8 @@ export function apiForgotPassword({ email }) {
 
 export function apiResetPassword({ email, code, newPassword }) {
 	return request("/api/auth/reset", { method: "POST", body: { email, code, newPassword } });
+}
+
+export function apiLogout() {
+	return request("/api/auth/logout", { method: "POST" });
 }

@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
@@ -26,6 +27,7 @@ app.use(cors({
   credentials: true
 }));
 
+app.use(cookieParser());
 app.use(express.json());
 
 // Static files
