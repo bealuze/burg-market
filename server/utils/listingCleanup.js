@@ -1,18 +1,31 @@
-const fs = require("fs");
-const path = require("path");
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
 const db = require("../db");
 const { sendListingExpiryWarning } = require("./email");
+const r2 = require("./r2");
 
-const uploadsDir = path.join(__dirname, "..", "uploads");
+function fileKeyFromPublicUrl(imageUrl) {
+  if (!imageUrl || typeof imageUrl !== "string") return null;
+  const base = process.env.R2_PUBLIC_BASE;
+  if (!base || typeof base !== "string") return null;
+  const normalizedBase = base.endsWith("/") ? base.slice(0, -1) : base;
+  if (!imageUrl.startsWith(`${normalizedBase}/`)) return null;
+  return imageUrl.slice(normalizedBase.length + 1);
+}
 
-function deleteImageIfStored(imageUrl) {
-  return new Promise((resolve) => {
-    if (!imageUrl || typeof imageUrl !== "string" || !imageUrl.startsWith("/uploads/")) return resolve();
-    const filename = imageUrl.replace("/uploads/", "");
-    const filePath = path.join(uploadsDir, filename);
-    fs.unlink(filePath, () => resolve());
-  });
+async function deleteImageFromR2IfStored(imageUrl) {
+  const fileKey = fileKeyFromPublicUrl(imageUrl);
+  if (!fileKey) return;
+  try {
+    await r2.send(
+      new DeleteObjectCommand({
+        Bucket: process.env.R2_BUCKET,
+        Key: fileKey,
+      })
+    );
+  } catch {
+    // non-fatal
+  }
 }
 
 function dbGet(sql, params) {
@@ -44,8 +57,8 @@ function dbRun(sql, params) {
 
 async function deleteListingById(listingId) {
   const row = await dbGet(`SELECT image_url as imageUrl FROM listings WHERE id = ?`, [listingId]);
+  await deleteImageFromR2IfStored(row?.imageUrl);
   await dbRun(`DELETE FROM listings WHERE id = ?`, [listingId]);
-  await deleteImageIfStored(row?.imageUrl);
 }
 
 async function runListingCleanup() {

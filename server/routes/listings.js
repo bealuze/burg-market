@@ -1,35 +1,15 @@
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
 const multer = require("multer");
+const crypto = require("crypto");
+const { PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
 const db = require("../db");
 const authMiddleware = require("../middleware/authMiddleware");
+const r2 = require("../utils/r2");
 
 const router = express.Router();
 
-const uploadsDir = path.join(__dirname, "..", "uploads");
-try {
-	fs.mkdirSync(uploadsDir, { recursive: true });
-} catch {
-	// non-fatal
-}
-
-const upload = multer({
-	storage: multer.diskStorage({
-		destination: (req, file, cb) => cb(null, uploadsDir),
-		filename: (req, file, cb) => {
-			const ext = path.extname(file.originalname || "").toLowerCase();
-			const safeExt = ext && ext.length <= 10 ? ext : "";
-			cb(null, `listing_${Date.now()}_${Math.random().toString(16).slice(2)}${safeExt}`);
-		},
-	}),
-	limits: { fileSize: 8 * 1024 * 1024 },
-	fileFilter: (req, file, cb) => {
-		const ok = typeof file.mimetype === "string" && file.mimetype.startsWith("image/");
-		cb(ok ? null : new Error("Only image uploads are allowed."), ok);
-	},
-});
+const upload = multer({ storage: multer.memoryStorage() });
 
 function absoluteUrl(req, maybePath) {
 	if (!maybePath || typeof maybePath !== "string") return null;
@@ -45,20 +25,38 @@ function normalizeStatus(value) {
 	return v === "sold" ? "sold" : "active";
 }
 
+function fileKeyFromPublicUrl(imageUrl) {
+	if (!imageUrl || typeof imageUrl !== "string") return null;
+	const base = process.env.R2_PUBLIC_BASE;
+	if (!base || typeof base !== "string") return null;
+	const normalizedBase = base.endsWith("/") ? base.slice(0, -1) : base;
+	if (!imageUrl.startsWith(`${normalizedBase}/`)) return null;
+	return imageUrl.slice(normalizedBase.length + 1);
+}
+
 function deleteListingAndImageById(listingId, cb) {
 	db.get(`SELECT image_url FROM listings WHERE id = ?`, [listingId], (err, row) => {
 		if (err) return cb(err);
 		const imageUrl = row?.image_url;
-		db.run(`DELETE FROM listings WHERE id = ?`, [listingId], (err2) => {
-			if (err2) return cb(err2);
-			if (imageUrl && typeof imageUrl === "string" && imageUrl.startsWith("/uploads/")) {
-				const filename = imageUrl.replace("/uploads/", "");
-				const filePath = path.join(uploadsDir, filename);
-				fs.unlink(filePath, () => cb(null));
-				return;
-			}
-			return cb(null);
-		});
+		const fileKey = fileKeyFromPublicUrl(imageUrl);
+
+		const deleteDbRow = () => {
+			db.run(`DELETE FROM listings WHERE id = ?`, [listingId], (err2) => {
+				if (err2) return cb(err2);
+				return cb(null);
+			});
+		};
+
+		if (!fileKey) return deleteDbRow();
+		r2
+			.send(
+				new DeleteObjectCommand({
+					Bucket: process.env.R2_BUCKET,
+					Key: fileKey,
+				})
+			)
+			.then(() => deleteDbRow())
+			.catch(() => deleteDbRow());
 	});
 }
 
@@ -120,6 +118,9 @@ router.post("/listings", authMiddleware, requireVerifiedUser, upload.single("ima
 	if (!req.file) {
 		return res.status(400).json({ error: "Image is required." });
 	}
+	if (typeof req.file.mimetype !== "string" || !req.file.mimetype.startsWith("image/")) {
+		return res.status(400).json({ error: "Only image uploads are allowed." });
+	}
 
 	const normalizedMethod = typeof contactMethod === "string" ? contactMethod.trim().toLowerCase() : "email";
 	const allowedMethods = new Set(["email", "phone", "instagram"]);
@@ -131,7 +132,19 @@ router.post("/listings", authMiddleware, requireVerifiedUser, upload.single("ima
 	const normalizedDescription = typeof description === "string" ? description.trim() : "";
 	const normalizedPrice = Number(price);
 	const normalizedContactValue = typeof contactValue === "string" ? contactValue.trim() : "";
-	const storedImagePath = `/uploads/${req.file.filename}`;
+	const fileKey = `listings/${crypto.randomUUID()}-${req.file.originalname}`;
+
+	const uploadToR2 = async () => {
+		await r2.send(
+			new PutObjectCommand({
+				Bucket: process.env.R2_BUCKET,
+				Key: fileKey,
+				Body: req.file.buffer,
+				ContentType: req.file.mimetype,
+			})
+		);
+		return `${process.env.R2_PUBLIC_BASE}/${fileKey}`;
+	};
 
 	if (!normalizedTitle) return res.status(400).json({ error: "Title is required." });
 	if (normalizedPrice < 0) return res.status(400).json({ error: "Price must be non-negative." });
@@ -159,8 +172,42 @@ router.post("/listings", authMiddleware, requireVerifiedUser, upload.single("ima
 			if (err) return res.status(500).json({ error: "Database error." });
 			if (!row) return res.status(401).json({ error: "User not found." });
 
-			const finalContactValue = String(row.email || "");
-			const finalContactDisplay = computeContactDisplay("email", finalContactValue);
+			(async () => {
+				try {
+					const imageUrl = await uploadToR2();
+					const finalContactValue = String(row.email || "");
+					const finalContactDisplay = computeContactDisplay("email", finalContactValue);
+					db.run(
+						`INSERT INTO listings (title, description, price, contact, user_id, image_url, contact_method, contact_value, status)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						[
+							normalizedTitle,
+							normalizedDescription,
+							normalizedPrice,
+							finalContactDisplay,
+							req.userId,
+							imageUrl,
+							"email",
+							finalContactValue,
+							"active",
+						],
+						function (err2) {
+							if (err2) return res.status(500).json({ error: "Database error." });
+							return res.status(201).json({ message: "Listing created.", id: this.lastID });
+						}
+					);
+				} catch (e) {
+					return res.status(500).json({ error: "Image upload failed." });
+				}
+			})();
+		});
+		return;
+	}
+
+	(async () => {
+		try {
+			const imageUrl = await uploadToR2();
+			const finalContactDisplay = computeContactDisplay(normalizedMethod, normalizedContactValue);
 			db.run(
 				`INSERT INTO listings (title, description, price, contact, user_id, image_url, contact_method, contact_value, status)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -170,40 +217,20 @@ router.post("/listings", authMiddleware, requireVerifiedUser, upload.single("ima
 					normalizedPrice,
 					finalContactDisplay,
 					req.userId,
-					storedImagePath,
-					"email",
-					finalContactValue,
+					imageUrl,
+					normalizedMethod,
+					normalizedContactValue,
 					"active",
 				],
-				function (err2) {
-					if (err2) return res.status(500).json({ error: "Database error." });
+				function (err) {
+					if (err) return res.status(500).json({ error: "Database error." });
 					return res.status(201).json({ message: "Listing created.", id: this.lastID });
 				}
 			);
-		});
-		return;
-	}
-
-	const finalContactDisplay = computeContactDisplay(normalizedMethod, normalizedContactValue);
-	db.run(
-		`INSERT INTO listings (title, description, price, contact, user_id, image_url, contact_method, contact_value, status)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		[
-			normalizedTitle,
-			normalizedDescription,
-			normalizedPrice,
-			finalContactDisplay,
-			req.userId,
-			storedImagePath,
-			normalizedMethod,
-			normalizedContactValue,
-			"active",
-		],
-		function (err) {
-			if (err) return res.status(500).json({ error: "Database error." });
-			return res.status(201).json({ message: "Listing created.", id: this.lastID });
+		} catch (e) {
+			return res.status(500).json({ error: "Image upload failed." });
 		}
-	);
+	})();
 });
 
 // GET /api/mylistings - Return listings created by logged-in user (verified users only)
