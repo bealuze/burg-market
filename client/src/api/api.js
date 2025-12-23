@@ -13,9 +13,8 @@ function normalizeToken(value) {
 	return trimmed;
 }
 
-const BASE_URL =
-	normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL) ||
-	"http://localhost:3000";
+const ENV_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+const BASE_URL = ENV_BASE_URL || (import.meta.env.DEV ? "http://localhost:3000" : "");
 const TOKEN_KEY = "token";
 
 function safeStorageGet(key) {
@@ -61,6 +60,11 @@ export function clearToken() {
 }
 
 async function request(path, { method = "GET", body, token } = {}) {
+	if (!BASE_URL) {
+		throw new Error(
+			"API base URL is not configured. Set VITE_API_BASE_URL (e.g. https://api.burg-market.com)."
+		);
+	}
 	const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
 	const headers = isFormData ? {} : { "Content-Type": "application/json" };
 	const normalizedToken = normalizeToken(token);
