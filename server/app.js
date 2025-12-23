@@ -22,10 +22,12 @@ try {
 }
 
 // Middleware
-app.use(cors({
-  origin: true,
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: ["https://burg-market.com", "https://www.burg-market.com"],
+    credentials: true,
+  })
+);
 
 app.use(cookieParser());
 app.use(express.json());
