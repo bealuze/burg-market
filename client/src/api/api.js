@@ -13,8 +13,11 @@ function normalizeToken(value) {
 	return trimmed;
 }
 
-const ENV_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
-const BASE_URL = ENV_BASE_URL || (import.meta.env.DEV ? "http://localhost:3000" : "");
+const BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
+if (!BASE_URL) {
+	throw new Error("VITE_API_BASE_URL is not defined");
+}
 const TOKEN_KEY = "token";
 
 function safeStorageGet(key) {
