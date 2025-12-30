@@ -17,24 +17,35 @@ const app = express();
 const uploadsDir = path.join(__dirname, "uploads");
 
 // Middleware
-const allowedOrigins = [
+const allowedOrigins = new Set([
   "https://burg-market.com",
   "https://www.burg-market.com",
   "https://api.burg-market.com",
-];
+]);
+
+function isAllowedOrigin(origin) {
+  // Allow non-browser callers (curl/postman) and Safari/WebKit "null" origin
+  if (!origin || origin === "null") return true;
+
+  if (allowedOrigins.has(origin)) return true;
+
+  // Allow Vercel preview + production domains (https://*.vercel.app)
+  try {
+    const url = new URL(origin);
+    if (url.protocol === "https:" && url.hostname.endsWith(".vercel.app")) return true;
+  } catch {
+    // ignore invalid Origin values
+  }
+
+  return false;
+}
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow Safari/WebKit "null" origin
-      if (!origin || origin === "null") {
-        return callback(null, true);
-      }
+      if (isAllowedOrigin(origin)) return callback(null, true);
 
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
+      console.warn("CORS blocked origin:", origin);
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
