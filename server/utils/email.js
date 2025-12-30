@@ -2,6 +2,8 @@ const nodemailer = require("nodemailer");
 const fs = require("fs");
 const path = require("path");
 
+let didLogSmtpConfig = false;
+
 function getDevLogPath() {
   const configured = process.env.VERIFICATION_LOG_PATH;
   if (configured && String(configured).trim()) return String(configured).trim();
@@ -19,21 +21,36 @@ function appendDevLog(line) {
 }
 
 function makeTransporter() {
-  if (
-    !process.env.MAIL_HOST ||
-    !process.env.MAIL_USER ||
-    !process.env.MAIL_PASS
-  ) {
-    return null;
+  const host = process.env.MAIL_HOST;
+  const port = Number(process.env.MAIL_PORT || 587);
+  const user = process.env.MAIL_USER;
+  const pass = process.env.MAIL_PASS;
+
+  const hasConfig = Boolean(host && user && pass);
+
+  // Log once at startup (no secrets).
+  if (!didLogSmtpConfig) {
+    didLogSmtpConfig = true;
+    if (host) {
+      console.log(`[email] SMTP host=${host} port=${port} configured=${hasConfig}`);
+    } else {
+      console.log("[email] SMTP not configured (missing MAIL_HOST)");
+    }
   }
 
+  if (!hasConfig) return null;
+
   return nodemailer.createTransport({
-    host: process.env.MAIL_HOST,
-    port: Number(process.env.MAIL_PORT || 587),
+    host,
+    port,
     secure: false,
+    requireTLS: true,
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 10_000,
     auth: {
-      user: process.env.MAIL_USER,
-      pass: process.env.MAIL_PASS,
+      user,
+      pass,
     },
   });
 }

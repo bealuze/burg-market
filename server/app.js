@@ -78,7 +78,9 @@ app.listen(PORT, () => {
     }
   };
 
-  setTimeout(run, 3_000);
+  // TODO(bealuzenebe): Temporarily disabled startup cleanup while debugging unexpected deletions / empty listings in production.
+  // Re-enable once data retention behavior is confirmed.
+  // setTimeout(run, 3_000);
   setInterval(run, 60 * 60 * 1000);
 });
 
